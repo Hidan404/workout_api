@@ -10,8 +10,20 @@ from workout_api.centro_treinamento.models import CentroTreinamentoModel
 
 from workout_api.contrib.dependencies import DatabaseDependency
 from sqlalchemy.future import select
+from pydantic import BaseModel
+from sqlalchemy.orm import joinedload
+from fastapi import APIRouter, status
+from sqlalchemy import select
+
+
+class AtletaResumo(BaseModel):
+    nome: str
+    centro_treinamento: str
+    categoria: str
+
 
 router = APIRouter()
+
 
 @router.post(
     '/', 
@@ -63,16 +75,36 @@ async def post(
     return atleta_out
 
 
+from sqlalchemy import select, and_
+
 @router.get(
     '/', 
-    summary='Consultar todos os Atletas',
+    summary='Consultar todos os Atletas com filtros opcionais',
     status_code=status.HTTP_200_OK,
     response_model=list[AtletaOut],
 )
-async def query(db_session: DatabaseDependency) -> list[AtletaOut]:
-    atletas: list[AtletaOut] = (await db_session.execute(select(AtletaModel))).scalars().all()
-    
+async def query(
+    db_session: DatabaseDependency,
+    nome: str | None = None,
+    cpf: str | None = None,
+) -> list[AtletaOut]:
+
+    query = select(AtletaModel)
+
+    filters = []
+    if nome:
+        filters.append(AtletaModel.nome.ilike(f'%{nome}%'))  # busca case-insensitive parcial
+    if cpf:
+        filters.append(AtletaModel.cpf == cpf)  # busca exata por CPF
+
+    if filters:
+        query = query.filter(and_(*filters))
+
+    result = await db_session.execute(query)
+    atletas = result.scalars().all()
+
     return [AtletaOut.model_validate(atleta) for atleta in atletas]
+
 
 
 @router.get(
@@ -140,3 +172,26 @@ async def delete(id: UUID4, db_session: DatabaseDependency) -> None:
     
     await db_session.delete(atleta)
     await db_session.commit()
+
+
+async def listar_atletas_resumo(db_session: DatabaseDependency) -> list[AtletaResumo]:
+    query = (
+        select(AtletaModel)
+        .options(
+            joinedload(AtletaModel.centro_treinamento),
+            joinedload(AtletaModel.categoria),
+        )
+    )
+    result = await db_session.execute(query)
+    atletas = result.scalars().all()
+
+    return [
+        AtletaResumo(
+            nome=atleta.nome,
+            centro_treinamento=atleta.centro_treinamento.nome,
+            categoria=atleta.categoria.nome,
+        )
+        for atleta in atletas
+    ]
+    
+    
